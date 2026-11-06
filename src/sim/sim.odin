@@ -217,7 +217,8 @@ step_player :: proc(s: ^Sim, p: ^Player, input: Input, dt: f32) {
 	p.flying = input.flying
 
 	forward := [3]f32{math.sin(p.yaw), 0, math.cos(p.yaw)}
-	right := [3]f32{math.cos(p.yaw), 0, -math.sin(p.yaw)}
+	// Screen right in a right-handed, y-up world: forward cross up.
+	right := [3]f32{-math.cos(p.yaw), 0, math.sin(p.yaw)}
 	wish := forward * input.move.z + right * input.move.x
 	if l := wish.x * wish.x + wish.z * wish.z; l > 1 {
 		wish /= math.sqrt(l)
