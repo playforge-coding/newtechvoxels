@@ -56,6 +56,9 @@ Config :: struct {
 	eye_height:    f32,
 	// Chunks loaded around each player, as a radius in chunks.
 	load_radius:   i32,
+	// Whether the sim loads chunks at all. A client's prediction sim runs
+	// on chunks the host sent and must never make its own.
+	load_chunks:   bool,
 }
 
 DEFAULT_CONFIG :: Config {
@@ -69,6 +72,7 @@ DEFAULT_CONFIG :: Config {
 	player_height = 1.8,
 	eye_height    = 1.62,
 	load_radius   = 3,
+	load_chunks   = true,
 }
 
 // A block that changed during a tick, for the host to broadcast.
@@ -124,6 +128,18 @@ sim_add_player :: proc(s: ^Sim) -> Player_Id {
 	return id
 }
 
+// Adds a player with a known id and state, for a client mirroring the
+// host's player.
+sim_add_player_at :: proc(s: ^Sim, id: Player_Id, pos: [3]f32) {
+	s.players[id] = Player {
+		id  = id,
+		pos = pos,
+	}
+	if u32(id) >= s.next_player {
+		s.next_player = u32(id) + 1
+	}
+}
+
 sim_remove_player :: proc(s: ^Sim, id: Player_Id) {
 	delete_key(&s.players, id)
 }
@@ -144,6 +160,9 @@ find_spawn :: proc(s: ^Sim, x, z: i32) -> [3]f32 {
 
 // Loads every chunk within the load radius of a position.
 ensure_loaded :: proc(s: ^Sim, pos: [3]f32) {
+	if !s.config.load_chunks {
+		return
+	}
 	center := world.chunk_pos_of(pos)
 	r := s.config.load_radius
 	for dy in -r ..= r {
@@ -168,6 +187,16 @@ sim_step :: proc(s: ^Sim, inputs: map[Player_Id]Input) {
 		}
 	}
 	s.tick += 1
+}
+
+// Advances one player by one tick without touching the others or the tick
+// counter. The client's prediction uses it to replay its own inputs.
+sim_step_player :: proc(s: ^Sim, id: Player_Id, input: Input) {
+	p := &s.players[id]
+	if p == nil {
+		return
+	}
+	step_player(s, p, input, tick_seconds(s))
 }
 
 // The direction a player looks along.

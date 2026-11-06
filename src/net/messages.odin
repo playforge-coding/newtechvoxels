@@ -76,6 +76,9 @@ Block_Changed :: struct {
 // Host to client on State, every tick for every visible player.
 Player_State :: struct {
 	tick:       u64,
+	// For the receiving player's own state: the tick of its newest input
+	// the host has applied. 0 for other players.
+	ack:        u64,
 	id:         sim.Player_Id,
 	pos, vel:   [3]f32,
 	yaw, pitch: f32,
@@ -146,6 +149,7 @@ encode :: proc(m: Message, buf: ^[dynamic]u8) {
 	case Player_State:
 		codec.put_u8(w, u8(Tag.Player_State))
 		codec.put_u64(w, v.tick)
+		codec.put_u64(w, v.ack)
 		codec.put_u32(w, u32(v.id))
 		put_f32x3(w, v.pos)
 		put_f32x3(w, v.vel)
@@ -219,6 +223,7 @@ decode :: proc(data: []u8, scratch: ^[dynamic]u8) -> (m: Message, ok: bool) {
 	case .Player_State:
 		s: Player_State
 		s.tick, _ = codec.get_u64(&r)
+		s.ack, _ = codec.get_u64(&r)
 		id, _ := codec.get_u32(&r)
 		s.id = sim.Player_Id(id)
 		s.pos = get_f32x3(&r)

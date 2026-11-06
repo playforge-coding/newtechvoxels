@@ -185,3 +185,20 @@ floor_i32 :: proc "contextless" (v: f32) -> i32 {
 	}
 	return i
 }
+
+// Adds a chunk that came from elsewhere (the network) to the world, taking
+// ownership of it. Replaces a loaded chunk at the same position.
+world_insert_chunk :: proc(w: ^World, c: Chunk) -> ^Chunk {
+	if old, ok := w.chunks[c.pos]; ok {
+		chunk_destroy(old)
+		old^ = c
+		old.dirty = true
+		return old
+	}
+	p := new(Chunk, w.allocator)
+	p^ = c
+	p.dirty = true
+	w.chunks[c.pos] = p
+	append(&w.loaded, c.pos)
+	return p
+}
