@@ -8,7 +8,8 @@ set positional-arguments
 # Flags for every Odin build and test: vet, one spelling per identifier,
 # warnings fail the build, the sdk collection, and mold where it exists.
 linker := if os() == "linux" { "-linker:mold" } else { "" }
-odin_flags := "-vet -strict-style -warnings-as-errors -collection:sdk=sdk " + linker
+check_flags := "-vet -strict-style -warnings-as-errors -collection:sdk=sdk"
+odin_flags := check_flags + " " + linker
 out := "out"
 
 default:
@@ -20,30 +21,21 @@ setup:
     @mkdir -p {{out}}
     odin run tools/setup -out:{{out}}/setup {{odin_flags}}
 
-# Build the client and the dedicated server in release mode into out/.
-build: build-client build-server
-
-build-client:
+# Build the client in release mode into out/. The dedicated server
+# executable arrives with the QUIC transport.
+build:
     @mkdir -p {{out}}
     odin build src/client -out:{{out}}/newtechvoxels -o:speed {{odin_flags}}
 
-build-server:
-    @mkdir -p {{out}}
-    odin build src/server -out:{{out}}/newtechvoxels-server -o:speed {{odin_flags}}
-
 # Run the client with any arguments (`just run --bench terrain`).
-run *args: build-client
+run *args: build
     {{out}}/newtechvoxels "$@"
-
-# Run the dedicated server with any arguments.
-server *args: build-server
-    {{out}}/newtechvoxels-server "$@"
 
 # Type-check every package without linking, then validate the shaders.
 check:
-    odin check src/client {{odin_flags}}
-    odin check src/server {{odin_flags}}
-    for d in tests/*/; do odin check "$d" {{odin_flags}}; done
+    odin check src/client {{check_flags}}
+    odin check tools/setup {{check_flags}}
+    for d in tests/*/; do odin check "$d" -no-entry-point {{check_flags}}; done
     for f in shaders/*.wgsl; do naga "$f"; done
 
 # Run every test package under tests/.
@@ -57,13 +49,13 @@ test-one pkg *args:
     odin test tests/{{pkg}} -out:{{out}}/tests/{{pkg}} {{odin_flags}} "${@:2}"
 
 # Run the benchmark scenes headless and write their CSVs into out/bench/.
-bench *args: build-client
+bench *args: build
     @mkdir -p {{out}}/bench
     {{out}}/newtechvoxels --bench all --bench-out {{out}}/bench "$@"
 
 # Format every Odin file in place.
 fmt:
-    for d in src sdk tests tools; do [ -d "$d" ] && odinfmt -w "$d"; done
+    for d in src sdk tests tools; do if [ -d "$d" ]; then odinfmt -w "$d"; fi; done
 
 # Fail if any Odin file isn't formatted (CI runs this).
 fmt-check: fmt
