@@ -1,0 +1,87 @@
+name: CI
+
+# Type-checks, tests (including the GPU meshing test on a software Vulkan
+# adapter) and builds the client on Linux and macOS, validates the shaders
+# and checks formatting. Skips changes that only touch the docs.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: &paths-ignore
+      - "docs/**"
+      - "**.md"
+      - "zensical.toml"
+      - "LICENSE"
+      - "sdk/LICENSE"
+  pull_request:
+    paths-ignore: *paths-ignore
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      # cargo-binstall lets mise fetch naga-cli as a prebuilt binary instead
+      # of compiling it.
+      - uses: cargo-bins/cargo-binstall@main
+
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+
+      - name: Install libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # The second line onward is SDL's documented Linux build dependency
+          # list (https://wiki.libsdl.org/SDL3/README-linux).
+          sudo apt-get install -y clang mold ninja-build cmake liblz4-dev libzstd-dev \
+            libvulkan1 mesa-vulkan-drivers \
+            build-essential pkg-config libasound2-dev libpulse-dev libaudio-dev libjack-dev \
+            libsndio-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
+            libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libdrm-dev libgbm-dev \
+            libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev \
+            libudev-dev libpipewire-0.3-dev libwayland-dev libdecor-0-dev liburing-dev
+          # SDL3 isn't packaged everywhere yet; build it when apt has none.
+          if ! sudo apt-get install -y libsdl3-dev; then
+            git clone --depth 1 --branch release-3.4.20 https://github.com/libsdl-org/SDL.git /tmp/SDL
+            cmake -S /tmp/SDL -B /tmp/SDL/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSDL_TEST_LIBRARY=OFF
+            cmake --build /tmp/SDL/build
+            sudo cmake --install /tmp/SDL/build
+            sudo ldconfig
+            # mold doesn't search /usr/local/lib on its own.
+            echo "LIBRARY_PATH=/usr/local/lib" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install libraries (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sdl3 lz4 zstd
+
+      - name: Fetch wgpu-native
+        run: just setup
+
+      - name: Check
+        run: just check
+
+      - name: Test
+        run: just test
+
+      - name: Build the client
+        run: just build
+
+      - name: Formatting
+        run: just fmt-check

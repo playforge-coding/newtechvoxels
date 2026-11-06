@@ -4,7 +4,7 @@
 
 New Tech Voxels is an experimental 3D voxel game aiming to harness the strengths of modern software. It is also a research project: it asks whether a modern, data-oriented stack is actually worth it, measured against early Minecraft (Alpha through Beta 1.7.3) on the same machine with matched settings. Every major subsystem is there to test a claim, so it has to be measurable (see Telemetry and benchmarks).
 
-Nothing is built yet. This file describes the plan; sections marked "planned" are decisions, not code. When a planned part lands, rewrite its description to say what the code does and drop the marker.
+Most of the MVP is built (see Current phase below); the parts still marked "planned" are decisions, not code. When a planned part lands, rewrite its description to say what the code does and drop the marker.
 
 The game is open source, in one monorepo, under two licenses (see Licensing).
 
@@ -12,14 +12,14 @@ The game is open source, in one monorepo, under two licenses (see Licensing).
 
 | Area | Choice | How it's reached | Status |
 | --- | --- | --- | --- |
-| Language | Odin | toolchain pinned in `mise.toml` | planned |
-| Windowing and input | SDL3 | `vendor:sdl3` | planned |
-| Rendering and compute | WebGPU through wgpu-native | `vendor:wgpu`, surface from `vendor:wgpu/sdl3glue` | planned |
-| Shaders | hand-written WGSL in `shaders/` | loaded with `wgpu.DeviceCreateShaderModule` | planned |
-| Network transport | QUIC through noq (n0's fork of Quinn), with iroh for P2P discovery, hole punching and relays | our own Rust C ABI shim, bound from Odin | planned |
-| Network compression | LZ4 | `vendor:compress/lz4` | planned |
-| World storage compression | Zstandard | our own Odin bindings to libzstd (Odin's vendor collection has none) | planned |
-| CPU math | SIMD | `core:simd` | planned |
+| Language | Odin | toolchain pinned in `mise.toml` | done |
+| Windowing and input | SDL3 | `vendor:sdl3` | done |
+| Rendering and compute | WebGPU through wgpu-native | `vendor:wgpu`, surface from `vendor:wgpu/sdl3glue`; `just setup` fetches the library | done |
+| Shaders | hand-written WGSL in `shaders/` | embedded with `#load`, validated with naga in `just check` | done |
+| Network transport | QUIC through noq (n0's fork of Quinn), with iroh for P2P discovery, hole punching and relays | our own Rust C ABI shim, bound from Odin | planned; the in-memory transport is done |
+| Network compression | LZ4 | `vendor:compress/lz4` | done |
+| World storage compression | Zstandard | `sdk/zstd`, our bindings to libzstd (Odin's vendor collection has none) | done |
+| CPU math | SIMD | `core:simd` | later; the hot loops are plain Odin so far |
 | Physics (selective) | Box3D | `vendor:box3d` | later |
 | Voice chat (toggleable) | Opus over MoQ (iroh-live) | bindings | later |
 | Webcam sharing (toggleable) | AV1 (dav1d to decode, an encoder to be picked), AV2 as an experiment | bindings | later |
@@ -28,7 +28,7 @@ The game is open source, in one monorepo, under two licenses (see Licensing).
 
 Choices that are still open: the modding runtime, the AV1 encoder, and whether noq is used directly or through iroh's endpoint API. Don't settle one of them as a side effect of other work. Raise it, and record the decision here when it's made.
 
-### Architecture (planned)
+### Architecture
 
 ```mermaid
 flowchart TD
@@ -62,27 +62,31 @@ flowchart TD
   Adding a hosting mode means adding a transport or a small `main`, never changing `sim` or `host`.
 - The client runs the same `sim` code for prediction (moving the local player and showing block edits before the host confirms them) and reconciles with what the host sends. It never has its own copy of a game rule.
 - The simulation runs at a fixed tick rate, decoupled from rendering. The renderer interpolates between the last two ticks.
-- Chunks are cubic, 32 by 32 by 32 voxels, so world height isn't a hard limit. Block ids are a global `u16`, and each chunk stores a palette plus packed indices sized to the palette. The same packed form goes to the GPU, across the network (under LZ4) and to disk (under Zstandard), so a chunk is never re-encoded between them. Benchmark scenes that compare with Minecraft limit world height to match the version under test.
-- Meshing runs on the GPU: chunk data is uploaded raw, a compute pass culls faces and writes vertices and indirect draw arguments, and the CPU never reads geometry back. A CPU mesher using `core:simd` exists as the reference and fallback, and tests compare the two.
+- Chunks are cubic, 32 by 32 by 32 voxels, so world height isn't a hard limit. Block ids are a global `u16`, and each chunk stores a palette plus packed indices sized to the palette (0, 1, 2, 4, 8 or 16 bits). The same packed form goes to the GPU, across the network (under LZ4) and to disk (under Zstandard), so a chunk is never re-encoded between them. Benchmark scenes that compare with Minecraft limit world height to match the version under test.
+- Meshing runs on the GPU: chunk data is uploaded raw, the CPU counts the visible faces exactly with popcounts over occupancy bitmasks and allocates that many in one big face buffer, and a compute pass writes the faces and the indirect draw arguments. The CPU never reads geometry back. `src/mesh` holds the CPU reference mesher and the test in `tests/render` compares the two face for face.
 - Network traffic is split by what loss means for it: ordered reliable streams for control (join, leave, handshakes), a stream per chunk transfer so one lost packet doesn't stall the others, and unreliable datagrams for state that goes stale (positions, later voice and video). Channel assignments live in one table in `src/net/` and in `docs/networking.md`.
 
-### Layout (planned)
+### Layout
 
-The repository is a monorepo. Odin packages are directories, and the `sdk` collection is passed with `-collection:sdk=sdk`.
+The repository is a monorepo. Odin packages are directories; packages under `src/` import each other by relative path (`import "../world"`) and the `sdk` collection is passed with `-collection:sdk=sdk`. A struct field must not share a name with a package the file imports (`sim`, `world`): inside the struct the field shadows the package.
 
-- `src/client/`: the game executable. SDL3 window and event loop, input, prediction, UI. Runs a host in the same process for singleplayer and P2P hosting.
-- `src/server/`: the dedicated, headless server executable, a small `main` around `src/host/`. It must build and run without SDL3 or a GPU.
-- `src/sim/`: the authoritative game logic as a library (see Architecture). Imports only `src/world/`, `core:` and the `vendor:` libraries the rules need (Box3D, later).
-- `src/host/`: sessions, players, the tick loop and change broadcasting over the transport interface. Shared by every hosting mode.
-- `src/world/`: chunks, palettes, block registry, world generation, the storage interface and its region file implementation. No rendering or networking imports.
-- `src/render/`: the wgpu device, surface, pipelines, GPU meshing, the CPU reference mesher.
-- `src/net/`: the transport interface, the in-memory transport, the QUIC transport over `sdk/noq`, message encoding.
-- `src/telemetry/`: frame and tick timing, counters, CSV output.
-- `shaders/`: WGSL sources, one file per pipeline, embedded with `#load` so a build has no loose files.
-- `sdk/`: BSD-3-Clause code: the modding API, and bindings meant for reuse outside the game (`sdk/zstd/`, `sdk/noq/` for the Odin side, `sdk/noq-ffi/` for the Rust shim crate).
-- `bench/`: benchmark scenes, scripts that run them, the matching Minecraft setups and `docs/benchmarks.md` notes.
-- `tests/`: Odin tests, one package per area.
-- `tools/`: helper programs (network condition setups with `tc netem`, plotting the telemetry CSVs).
+- `src/client/`: the game executable. SDL3 window and event loop, input, the game loop, the benchmark scenes. Runs a host in the same process for singleplayer (and P2P hosting, later).
+- `src/server/` (planned): the dedicated, headless server executable, a small `main` around `src/host/` on the QUIC transport. It must build and run without SDL3 or a GPU.
+- `src/codec/`: bounds-checked little-endian reading and writing, shared by every format.
+- `src/world/`: chunks, palettes, the chunk byte format, block registry, noise and generation, the storage interface with its in-memory implementation, the World container. No rendering or networking imports.
+- `src/mesh/`: the face format shared with the shaders, occupancy bitmasks, exact face counting, the CPU reference mesher.
+- `src/sim/`: the authoritative game logic as a library (see Architecture). Imports only `src/world/` and `core:`.
+- `src/net/`: the transport interface, the in-memory transport, message encoding with LZ4 on chunk payloads. The QUIC transport over `sdk/noq` goes here.
+- `src/host/`: sessions, players, the tick loop, chunk streaming and eviction over the transport interface. Shared by every hosting mode.
+- `src/session/`: the client side without rendering: joining, the mirrored world, other players, prediction and reconciliation.
+- `src/storage/`: region files with Zstandard, implementing the world's storage interface.
+- `src/render/`: the wgpu device (with a headless mode), the range allocator, chunk slots, GPU meshing, indirect draws, camera and frustum.
+- `src/telemetry/`: per-frame rows, percentile summaries, CSV output.
+- `shaders/`: WGSL sources, one file per pipeline, embedded with `#load` so a build has no loose files. `mesh.wgsl` meshes, `chunk.wgsl` draws.
+- `sdk/`: BSD-3-Clause code: `sdk/zstd/` today; the modding API, `sdk/noq/` (Odin side) and `sdk/noq-ffi/` (the Rust shim crate) later.
+- `tests/`: Odin tests, one package per area, named `test_<area>`.
+- `tools/`: helper programs. `tools/setup` fetches wgpu-native. Network condition setups and CSV plotting come later.
+- `docs/`: the Zensical site. `docs/benchmarks.md` holds setups and results.
 
 ### Reusability and flexibility
 
@@ -111,16 +115,16 @@ This is an original game in the voxel sandbox genre, not a copy of Minecraft. Mi
 - Art, audio and fonts are made for the project or come from sources whose license allows redistribution under the project's terms. Record the source and license of every third-party asset in `assets/CREDITS.md`.
 - When a feature comes from a community suggestion, link the suggestion in the issue or doc that describes it.
 
-## Building and testing (planned)
+## Building and testing
 
-- Odin, Rust and helper tools come from mise. `mise.toml` pins Odin to a monthly release tag (not a nightly) and ols (which ships `odinfmt`). Rust's version is pinned in `sdk/noq-ffi/rust-toolchain.toml`. Do not install Odin another way alongside mise.
-- Commands live in a `justfile` at the root: `just build`, `just run`, `just server`, `just test`, `just check`, `just fmt`, `just bench`. Add a recipe only for a step those don't cover. Compiler settings that apply to the whole project (collections, vet flags) live in the justfile's shared variables, not repeated per recipe.
-- `just build` builds the Rust shim first (`cargo build --release`, which also writes its C header with cbindgen), then the Odin executables.
-- Tests use `core:testing` and run with `odin test`. Add a test with every behavior change. Areas that need tests from the start: palette packing round trips, chunk codecs (including truncated and malicious input), world generation determinism (a seed gives the same chunk bytes on every platform, checked against committed hashes), GPU versus CPU mesher agreement, the message encoding, and the simulation driven headless by scripted inputs (the same inputs give the same state, and a client predicting with `sim` ends up where the host does). Host tests use the in-memory transport, so they cover every hosting mode without a network.
-- GPU tests need an adapter. They skip with a printed message when none is found, so `just test` runs on headless CI; CI runs them where a software adapter (lavapipe or WARP) is available.
-- Validate every WGSL file in `shaders/` with naga (`naga-cli`) in `just check` and in CI, so a shader error fails before the game starts.
+- Odin and the helper tools come from mise. `mise.toml` pins Odin to a monthly release tag (not a nightly), ols (which ships `odinfmt`), just and naga-cli. Rust's version will be pinned in `sdk/noq-ffi/rust-toolchain.toml` once that crate exists. Do not install Odin another way alongside mise.
+- Odin links through clang (on Linux the builds use mold through `-linker:mold`), and the game links SDL3, lz4 and zstd from the system. `just setup` downloads the wgpu-native release that `vendor:wgpu` expects into Odin's vendor directory; run it once per machine and after an Odin bump. `tools/setup` pins the wgpu-native version; keep it equal to the one `vendor/wgpu/wgpu.odin` names.
+- Commands live in the `justfile` at the root: `just build`, `just run`, `just test`, `just test-one <pkg>`, `just check`, `just fmt`, `just fmt-check`, `just bench`, `just docs`, `just remote <recipe>`. Add a recipe only for a step those don't cover. Compiler flags shared by every build live in the justfile's variables (`check_flags` for `odin check`, `odin_flags` adds the linker), not repeated per recipe.
+- Tests use `core:testing` and run with `odin test`, one package per directory under `tests/`. Add a test with every behavior change. They cover palette packing, the chunk codec (round trips, every truncation, bad widths and indices), generation determinism (a pinned hash; update it on purpose and say so in the commit), face counting against the CPU mesher, the GPU mesher against the CPU one, the message encoding (round trips, truncations, oversize and NaN input), the sim from scripted inputs, host and clients in lockstep over the in-memory transport (prediction must match with no corrections), and region files including corrupted ones.
+- The GPU test needs an adapter. It logs that it was skipped and passes when none is found, so `just test` runs on headless machines; with Mesa's lavapipe it runs for real on a machine without a GPU, and CI installs `mesa-vulkan-drivers` for that.
+- `just check` type-checks every package (`-no-entry-point` for the test packages) and validates every WGSL file with naga, so a shader error fails before the game starts.
 - `odin check` gives fast type errors without a full build. Code for another platform can be checked from any machine with `-target:windows_amd64`, `-target:darwin_arm64` and so on. Do this when touching platform code you can't run.
-- CI runs `just check` and `just test` on Linux, macOS and Windows, builds both executables there, and checks formatting. It skips changes that only touch `docs/`, Markdown files or `zensical.toml`.
+- CI (`.github/workflows/ci.yml`) runs `just setup`, `just check`, `just test`, `just build` and `just fmt-check` on Linux and macOS, building SDL3 from source where apt has no `libsdl3-dev`. Windows waits on a vcpkg setup. It skips changes that only touch `docs/`, Markdown files, `zensical.toml` or the licenses.
 
 ## Telemetry and benchmarks
 
@@ -160,9 +164,9 @@ The research question needs numbers, so measurement is a feature, not an afterth
 
 Mods will be sandboxed, and the API lives in `sdk/` under BSD-3-Clause. WebAssembly is the leading option because it is sandboxed and language-agnostic (JavaScript through Javy, Rust, Zig, Odin). Lua and JavaScript are still being considered. Whatever runtime is picked, the API is data-oriented: mods record batches of changes into buffers that the engine applies in bulk, never a host call per block. Don't add mod hooks before the runtime is chosen.
 
-## Current phase: the MVP
+## Current phase: finishing the MVP
 
-The MVP is a single-player-capable, multiplayer-ready voxel world with the benchmark harness, and nothing more. In scope: the SDL3 window and wgpu renderer, cubic chunks with palettes, deterministic terrain generation, GPU meshing with the CPU reference, breaking and placing blocks, a first-person player with collision, `sim` and `host` with singleplayer over the in-memory transport, Zstandard region files, the QUIC transport for a dedicated server with LZ4 chunk streams, and the telemetry plus the first benchmark scenes. Out of scope until the MVP is done: P2P, voice, video, physics, modding, unipute, lighting beyond a simple directional light with ambient occlusion. If a task drifts into an out-of-scope area, stop and ask.
+The MVP is a single-player-capable, multiplayer-ready voxel world with the benchmark harness, and nothing more. Done: the SDL3 window and wgpu renderer, cubic chunks with palettes, deterministic terrain generation, GPU meshing with the CPU reference, breaking and placing blocks, a first-person player with collision, `sim` and `host` with singleplayer over the in-memory transport and client prediction, Zstandard region files, telemetry and the terrain, edits and static scenes. Still to do: the QUIC transport over noq with LZ4 chunk streams, the dedicated server executable, the packet-loss scene, rendering other players, and the first measured comparison. `docs/roadmap.md` tracks it. Out of scope until the MVP is done: P2P, voice, video, physics, modding, unipute, lighting beyond a simple directional light with ambient occlusion. If a task drifts into an out-of-scope area, stop and ask.
 
 ## Searching the codebase
 
@@ -179,14 +183,14 @@ If your harness has dedicated search or file tools that already wrap these, thos
 
 Always update the docs if necessary when changing or adding code. If the docs already contain outdated information, expand your scope to cover that info too. That includes this file: when the layout, build, stack or tooling change, update the overview and the build section here.
 
-The docs will be a [Zensical](https://zensical.org) site: `zensical.toml` at the root, pages in `docs/`. `uvx zensical build --strict` checks it and writes `site/` (ignored by git), and `uvx zensical serve` previews it. Planned pages:
+The docs are a [Zensical](https://zensical.org) site: `zensical.toml` at the root, pages in `docs/`. `just docs` (`uvx zensical build --strict`) checks it and writes `site/` (ignored by git), and `just docs-serve` previews it. Pages:
 
-- `index.md`: what the game is and the research question.
-- `getting-started.md`: installing the toolchain, building, running the client and the server.
-- `architecture.md`: the subsystems, threads, and data flow; the chunk format and why it's shared between GPU, network and disk.
-- `networking.md`: the transport interface, the channel table, message formats, and the P2P plan.
-- `rendering.md`: the passes, GPU meshing, bind group layouts.
-- `benchmarks.md`: method, setups and results.
+- `index.md`: what the game is, the research question, what exists.
+- `getting-started.md`: the toolchain, system libraries per platform, building, running, controls, tests, benchmarks, the remote recipe.
+- `architecture.md`: the package graph, chunks and their byte format, generation, world and storage, sim, hosting modes, the client side, known gaps.
+- `networking.md`: the transport interface and its implementations, the channel table, the message table, prediction.
+- `rendering.md`: the buffers and their budgets, meshing, drawing, headless mode.
+- `benchmarks.md`: the scenes, what a reported result must include, results.
 - `modding.md`: once a runtime is chosen.
 - `roadmap.md`: what's done and what's planned.
 
