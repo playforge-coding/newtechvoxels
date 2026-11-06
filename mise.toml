@@ -1,0 +1,10 @@
+# The toolchain. `mise install` gets everything here; Rust's version is
+# pinned by sdk/noq-ffi/rust-toolchain.toml once that crate exists.
+[tools]
+# A monthly release tag, not a nightly.
+odin = "dev-2026-11a"
+# The Odin language server; it ships odinfmt, which formats the code.
+ols = "dev-2026-10"
+just = "1.59.0"
+# Validates the WGSL in shaders/ (`just check`).
+"cargo:naga-cli" = "30.0.1"
