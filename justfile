@@ -17,6 +17,7 @@ default:
 # Downloads the wgpu-native library the vendor:wgpu bindings link into Odin's
 # vendor directory, which is where they look for it. Run once per machine.
 setup:
+    @mkdir -p {{out}}
     odin run tools/setup -out:{{out}}/setup {{odin_flags}}
 
 # Build the client and the dedicated server in release mode into out/.
