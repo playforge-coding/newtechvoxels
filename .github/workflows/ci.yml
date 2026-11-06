@@ -52,7 +52,7 @@ jobs:
             libxkbcommon-dev libdecor-0-dev libpipewire-0.3-dev libdbus-1-dev
           # SDL3 isn't packaged everywhere yet; build it when apt has none.
           if ! sudo apt-get install -y libsdl3-dev; then
-            git clone --depth 1 --branch release-3.5.0 https://github.com/libsdl-org/SDL.git /tmp/SDL
+            git clone --depth 1 --branch release-3.4.20 https://github.com/libsdl-org/SDL.git /tmp/SDL
             cmake -S /tmp/SDL -B /tmp/SDL/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSDL_TEST_LIBRARY=OFF
             cmake --build /tmp/SDL/build
             sudo cmake --install /tmp/SDL/build

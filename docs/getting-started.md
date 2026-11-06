@@ -15,7 +15,7 @@ Odin links through `clang`, and on Linux the builds use `mold`. System libraries
 
 | Platform | Packages |
 | --- | --- |
-| Debian and Ubuntu | `clang mold libsdl3-dev liblz4-dev libzstd-dev`. Where there is no `libsdl3-dev` yet, build SDL 3.5 from source with CMake and Ninja (`-DSDL_TEST_LIBRARY=OFF`). |
+| Debian and Ubuntu | `clang mold libsdl3-dev liblz4-dev libzstd-dev`. Where there is no `libsdl3-dev` yet, build SDL 3.4 from source with CMake and Ninja (`-DSDL_TEST_LIBRARY=OFF`). |
 | macOS | `brew install sdl3 lz4 zstd` and the Xcode command line tools for clang. |
 | Windows | SDL3, lz4 and zstd through vcpkg; the bindings link `SDL3.lib`, `lz4` and `zstd.lib`. Not yet tried in CI. |
 
