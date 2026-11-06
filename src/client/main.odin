@@ -6,6 +6,8 @@
 package client
 
 import "core:fmt"
+import "core:image"
+import "core:image/png"
 import "core:log"
 import "core:math"
 import "core:os"
@@ -37,6 +39,8 @@ Options :: struct {
 	width, height: u32,
 	view_radius:   i32,
 	name:          string,
+	// Save the last frame here as a PNG (headless runs only).
+	screenshot:    string,
 }
 
 DEFAULT_OPTIONS :: Options {
@@ -127,7 +131,8 @@ usage :: proc() {
   --bench <scene>       run a benchmark scene: terrain, edits, static, all
   --bench-seconds <s>   how long a scene runs (default 20)
   --bench-out <dir>     where the CSVs go (default out/bench)
-  --headless            no window; render offscreen (benchmarks)`,
+  --headless            no window; render offscreen (benchmarks)
+  --screenshot <file>   save the last headless frame as a PNG`,
 	)
 }
 
@@ -182,6 +187,9 @@ parse_args :: proc(args: []string) -> (opts: Options, ok: bool) {
 			opts.bench_out = value
 		case "--headless":
 			opts.headless = true
+		case "--screenshot":
+			value, got = next(args, &i)
+			opts.screenshot = value
 		case "--help", "-h":
 			usage()
 			return opts, false
@@ -511,7 +519,31 @@ game_loop :: proc(g: ^Game) {
 		free_all(context.temp_allocator)
 	}
 	render.wait_idle(&g.renderer)
+	if g.opts.screenshot != "" && g.opts.headless {
+		save_screenshot(g, g.opts.screenshot)
+	}
 	finish_telemetry(g)
+}
+
+save_screenshot :: proc(g: ^Game, path: string) {
+	pixels, w, h := render.read_target(&g.renderer, g.renderer.offscreen, context.temp_allocator)
+	if pixels == nil {
+		log.error("could not read the frame back")
+		return
+	}
+	img := image.Image {
+		width    = w,
+		height   = h,
+		channels = 4,
+		depth    = 8,
+	}
+	img.pixels = make([dynamic]u8, len(pixels), context.temp_allocator)
+	copy(img.pixels[:], pixels)
+	if err := png.save(path, &img); err != nil {
+		log.errorf("could not write %s: %v", path, err)
+	} else {
+		log.infof("wrote %s", path)
+	}
 }
 
 finish_telemetry :: proc(g: ^Game) {
@@ -540,9 +572,11 @@ bench_controls :: proc(g: ^Game, elapsed: f64) {
 	c.flying = true
 	switch g.opts.bench {
 	case "terrain":
-		// Fly forward over new terrain, looking slightly down.
+		// Climb above the highest ground for the first seconds (flying still
+		// collides), then fly forward over new terrain, looking down.
+		c.up = elapsed < 5
 		c.forward = true
-		c.pitch = -0.35
+		c.pitch = -0.45
 		c.yaw = 0.3
 	case "edits":
 		// Stand still and break the ground, then place, as fast as the
