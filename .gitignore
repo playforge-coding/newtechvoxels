@@ -1,0 +1,5 @@
+/out/
+/site/
+/saves/
+/sdk/noq-ffi/target/
+*.bin
