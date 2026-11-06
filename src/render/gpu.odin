@@ -385,3 +385,72 @@ read_buffer :: proc(
 	}
 	return out
 }
+
+// Reads the headless target (or a given texture) back as RGBA8 rows, for
+// screenshots. Tests and the --screenshot option use it; the renderer
+// itself never reads back.
+read_target :: proc(
+	r: ^Renderer,
+	texture: wgpu.Texture,
+	allocator := context.allocator,
+) -> (
+	pixels: []u8,
+	width, height: int,
+) {
+	// Rows are padded to 256 bytes for the copy.
+	row := (int(r.width) * 4 + 255) / 256 * 256
+	size := u64(row * int(r.height))
+	staging := wgpu.DeviceCreateBuffer(
+		r.device,
+		&{label = "screenshot", size = size, usage = {.MapRead, .CopyDst}},
+	)
+	defer wgpu.BufferRelease(staging)
+	encoder := wgpu.DeviceCreateCommandEncoder(r.device, nil)
+	wgpu.CommandEncoderCopyTextureToBuffer(
+		encoder,
+		&{texture = texture, aspect = .All},
+		&{buffer = staging, layout = {bytesPerRow = u32(row), rowsPerImage = r.height}},
+		&{r.width, r.height, 1},
+	)
+	commands := wgpu.CommandEncoderFinish(encoder, nil)
+	wgpu.CommandEncoderRelease(encoder)
+	wgpu.QueueSubmit(r.queue, {commands})
+	wgpu.CommandBufferRelease(commands)
+
+	Map_State :: struct {
+		done, ok: bool,
+	}
+	state: Map_State
+	wgpu.BufferMapAsync(staging, {.Read}, 0, uint(size), {callback = on_map, userdata1 = &state})
+	on_map :: proc "c" (
+		status: wgpu.MapAsyncStatus,
+		message: string,
+		userdata1, userdata2: rawptr,
+	) {
+		st := (^Map_State)(userdata1)
+		st.done = true
+		st.ok = status == .Success
+	}
+	for !state.done {
+		wgpu.DevicePoll(r.device, true)
+	}
+	if !state.ok {
+		return nil, 0, 0
+	}
+	mapped := wgpu.BufferGetConstMappedRange(staging, 0, uint(size))
+	width, height = int(r.width), int(r.height)
+	pixels = make([]u8, width * height * 4, allocator)
+	bgra := r.format == .BGRA8Unorm || r.format == .BGRA8UnormSrgb
+	for y in 0 ..< height {
+		src := mapped[y * row:][:width * 4]
+		dst := pixels[y * width * 4:][:width * 4]
+		copy(dst, src)
+		if bgra {
+			for x in 0 ..< width {
+				dst[x * 4], dst[x * 4 + 2] = dst[x * 4 + 2], dst[x * 4]
+			}
+		}
+	}
+	wgpu.BufferUnmap(staging)
+	return
+}
