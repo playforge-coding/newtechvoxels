@@ -63,6 +63,8 @@ jobs:
             cmake --build /tmp/SDL/build
             sudo cmake --install /tmp/SDL/build
             sudo ldconfig
+            # mold doesn't search /usr/local/lib on its own.
+            echo "LIBRARY_PATH=/usr/local/lib" >> "$GITHUB_ENV"
           fi
 
       - name: Install libraries (macOS)
